@@ -35,17 +35,28 @@ def block_tfidf(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     s1_texts = s1[column].fillna("").astype(str)
     target_texts = target_df[column].fillna("").astype(str)
     
-    # 2. Fit vectorizer
-    print("  Fitting TF-IDF Vectorizer...")
+    # 2. Fit vectorizer on a sample to save memory
+    print("  Fitting TF-IDF Vectorizer on a sample...")
     t0 = time.time()
     vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=2)
-    vectorizer.fit(pd.concat([s1_texts, target_texts]))
+    # A sample of 500k strings is more than enough to capture all common char n-grams
+    sample_size = min(500000, len(s1_texts))
+    sample_texts = s1_texts.sample(n=sample_size, random_state=42)
+    vectorizer.fit(sample_texts)
     print(f"  Fitting took {time.time()-t0:.2f}s")
     
     print("  Transforming to sparse matrices...")
     t0 = time.time()
     X1 = vectorizer.transform(s1_texts)
-    X2 = vectorizer.transform(target_texts)
+    
+    # Transform in chunks to prevent MemoryError from Scikit-learn internal dicts
+    import scipy.sparse as sp
+    X2_chunks = []
+    chunk_size_transform = 500000
+    for i in range(0, len(target_texts), chunk_size_transform):
+        X2_chunks.append(vectorizer.transform(target_texts.iloc[i:i+chunk_size_transform]))
+    X2 = sp.vstack(X2_chunks)
+    
     print(f"  Shapes: X1={X1.shape}, X2={X2.shape}. Took {time.time()-t0:.2f}s")
     
     # Pre-fetch numpy arrays of IDs for fast lookup

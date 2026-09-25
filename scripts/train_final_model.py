@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from business_entity_resolution.data import load_source, load_ground_truth, parse_matched_ids, TRAIN_DIR
 from business_entity_resolution.normalization import normalize_dataframe
 from business_entity_resolution.blocking import block_tfidf
-from business_entity_resolution.features import extract_features_for_pairs
+from business_entity_resolution.features import build_feature_matrix
 
 def main():
     PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -46,12 +46,18 @@ def main():
     gt_with_matches = gt[gt['matched_entity_ids'].str.len() > 0]
     
     print("Generating Training Pairs...")
-    # 1. Sample 30,000 S1 IDs for blocking to get hard negatives (reduced from 50k to save RAM for the concat target)
+    # 1. Sample 30,000 S1 IDs for blocking to get hard negatives
     s1_sample = s1.sample(n=30000, random_state=42)
     
-    # 2. Block using TF-IDF against S2+S3
+    # To prevent a 6GB memory spike when creating the TF-IDF sparse matrix for all 10M rows,
+    # we sample the target_df down to 2 Million rows just for hard-negative generation. 
+    # This gives us plenty of confusing pairs without blowing up RAM.
+    target_sample = target_df.sample(n=min(2000000, len(target_df)), random_state=42)
+    
+    # 2. Block using TF-IDF against the sampled target
     t0 = time.time()
-    candidate_pairs = block_tfidf(s1_sample, target_df, 'business_name', top_k=5, similarity_threshold=0.4)
+    candidate_pairs = block_tfidf(s1_sample, target_sample, 'business_name', top_k=5, similarity_threshold=0.4)
+    del target_sample # Free memory immediately
     print(f"Blocking generated {len(candidate_pairs):,} candidates in {time.time()-t0:.2f}s")
     
     # 3. Add positive Ground Truth pairs to ensure we have lots of true matches
@@ -88,7 +94,7 @@ def main():
     s1_lookup = s1.set_index('entity_id')
     target_lookup = target_df.set_index('entity_id')
     
-    X = extract_features_for_pairs(pairs_df, s1_lookup, target_lookup)
+    X = build_feature_matrix(pairs_df, s1_lookup, target_lookup)
     y = pairs_df['label']
     print(f"Feature extraction took {time.time()-t0:.2f}s")
     
