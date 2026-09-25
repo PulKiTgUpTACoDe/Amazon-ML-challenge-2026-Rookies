@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import re
 from rapidfuzz import fuzz, distance
 
 def compute_string_features(s1_series: pd.Series, s2_series: pd.Series, prefix: str) -> pd.DataFrame:
@@ -79,6 +80,36 @@ def compute_string_features(s1_series: pd.Series, s2_series: pd.Series, prefix: 
     }, index=s1_series.index)
 
 
+def compute_numeric_features(s1_series: pd.Series, s2_series: pd.Series, prefix: str) -> pd.DataFrame:
+    """
+    Extracts numbers from strings and compares their Jaccard similarity.
+    Critical for address matching (e.g. '123 Main St' vs '124 Main St').
+    """
+    s1 = s1_series.fillna("").astype(str)
+    s2 = s2_series.fillna("").astype(str)
+    
+    def extract_nums(text):
+        return set(re.findall(r'\d+', text))
+    
+    def num_match(a, b):
+        nums_a = extract_nums(a)
+        nums_b = extract_nums(b)
+        if not nums_a and not nums_b:
+            return -1.0 # Neither has numbers (missing signal)
+        if not nums_a or not nums_b:
+            return 0.0 # One has numbers, the other doesn't (mismatch signal)
+        
+        intersection = len(nums_a & nums_b)
+        union = len(nums_a | nums_b)
+        return intersection / union
+        
+    num_jaccard = [num_match(a, b) for a, b in zip(s1, s2)]
+    
+    return pd.DataFrame({
+        f"{prefix}_num_match": num_jaccard,
+    }, index=s1_series.index)
+
+
 def build_feature_matrix(pairs: pd.DataFrame, s1_df: pd.DataFrame, target_df: pd.DataFrame) -> pd.DataFrame:
     """
     Given a DataFrame of pairs (s1_id, target_id), join the raw features and compute similarities.
@@ -104,6 +135,9 @@ def build_feature_matrix(pairs: pd.DataFrame, s1_df: pd.DataFrame, target_df: pd
     name_feats = compute_string_features(df['s1_name'], df['target_name'], 'name')
     address_feats = compute_string_features(df['s1_address'], df['target_address'], 'addr')
     
+    # Numeric feature for addresses
+    address_num_feats = compute_numeric_features(df['s1_address'], df['target_address'], 'addr')
+    
     # Country features
     country_match = (df['s1_country'].fillna("") == df['target_country'].fillna("")).astype(int)
     country_missing = (df['s1_country'].isna() | df['target_country'].isna()).astype(int)
@@ -113,7 +147,7 @@ def build_feature_matrix(pairs: pd.DataFrame, s1_df: pd.DataFrame, target_df: pd
     target_has_addr = (df['target_address'].fillna("").str.len() > 2).astype(int)
     both_have_addr = (s1_has_addr & target_has_addr).astype(int)
     
-    feature_df = pd.concat([name_feats, address_feats], axis=1)
+    feature_df = pd.concat([name_feats, address_feats, address_num_feats], axis=1)
     feature_df['country_match'] = country_match
     feature_df['country_missing'] = country_missing
     feature_df['s1_has_addr'] = s1_has_addr

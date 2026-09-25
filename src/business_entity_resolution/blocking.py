@@ -153,7 +153,7 @@ def block_tfidf(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     # 2. Fit vectorizer on a sample to save memory
     print("  Fitting TF-IDF Vectorizer on a sample...")
     t0 = time.time()
-    vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=2)
+    vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=2, max_df=0.1)
     sample_size = min(500000, len(s1_texts))
     sample_texts = s1_texts.sample(n=sample_size, random_state=42)
     vectorizer.fit(sample_texts)

@@ -1,46 +1,33 @@
-import re
-import unicodedata
 import pandas as pd
-from .abbreviations import expand_business_name, expand_address
-
-def normalize_text(text: str) -> str:
-    """
-    Apply conservative text normalization:
-    1. Unicode NFKD (decompose, encode to ASCII to drop accents, decode)
-    2. Lowercase
-    3. Replace punctuation with space
-    4. Remove extra whitespace
-    """
-    if pd.isna(text) or not isinstance(text, str):
-        return ""
-    
-    # 1. Unicode normalize and remove accents
-    text = unicodedata.normalize('NFKD', text).encode('ASCII', 'ignore').decode('utf-8')
-    
-    # 2. Lowercase
-    text = text.lower()
-    
-    # 3. Replace punctuation with space
-    text = re.sub(r'[^\w\s]', ' ', text)
-    
-    # 4. Squish whitespace
-    text = re.sub(r'\s+', ' ', text).strip()
-    
-    return text
+import unicodedata
+from .abbreviations import BUSINESS_ABBREVIATIONS, ADDRESS_ABBREVIATIONS
 
 def normalize_dataframe(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
-    """
-    Apply text normalization + abbreviation expansion to a list of columns in a DataFrame.
-    """
     for col in columns:
-        if col == 'entity_id' or col == 'country':
+        if col not in df.columns or col in ['entity_id', 'country']:
             continue
-        if col in df.columns:
-            df[col] = df[col].apply(normalize_text)
-            # Apply abbreviation expansion after basic normalization
-            if col == 'business_name':
-                df[col] = df[col].apply(expand_business_name)
-            elif col == 'business_address':
-                df[col] = df[col].apply(expand_address)
+            
+        print(f"  Normalizing {col}...")
+        
+        # 1. Vectorized Lowercase & fast stripping
+        df[col] = df[col].astype(str).str.lower().str.strip()
+        
+        # 2. Vectorized Punctuation removal (replace anything not word/space with space)
+        df[col] = df[col].str.replace(r'[^\w\s]', ' ', regex=True)
+        
+        # 3. Vectorized Unicode normalization (NFKD to remove accents)
+        df[col] = df[col].map(
+            lambda x: unicodedata.normalize('NFKD', x).encode('ASCII', 'ignore').decode('utf-8') 
+            if pd.notna(x) else ""
+        )
+        
+        # 4. Apply Abbreviations Column-Wise
+        abbr_dict = BUSINESS_ABBREVIATIONS if col == 'business_name' else ADDRESS_ABBREVIATIONS
+        if abbr_dict:
+            for pattern, replacement in abbr_dict.items():
+                df[col] = df[col].str.replace(pattern, replacement, regex=True)
+                
+        # 5. Collapse multiple spaces
+        df[col] = df[col].str.replace(r'\s+', ' ', regex=True).str.strip()
+        
     return df
-

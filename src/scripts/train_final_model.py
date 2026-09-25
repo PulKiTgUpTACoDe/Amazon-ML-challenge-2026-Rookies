@@ -97,19 +97,67 @@ def main():
     y = pairs_df['label']
     print(f"Feature extraction took {time.time()-t0:.2f}s")
     
-    print("Training LightGBM Model with Cross-Validation...")
-    from sklearn.model_selection import train_test_split
+    print("Training LightGBM Model with 5-Fold GroupKFold Cross-Validation...")
+    from sklearn.model_selection import GroupKFold
     import lightgbm as lgb
     import collections
+    from business_entity_resolution.evaluation import macro_f05
     
-    # Hold out 20% for threshold optimization
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42, stratify=y)
-    pairs_train = pairs_df.iloc[X_train.index]
-    pairs_val = pairs_df.iloc[X_val.index]
+    # 5-Fold GroupKFold on s1_id guarantees ZERO entity leakage between train and val
+    gkf = GroupKFold(n_splits=5)
+    oof_probs = np.zeros(len(pairs_df))
     
-    model = lgb.LGBMClassifier(
-        n_estimators=300,
-        learning_rate=0.05,
+    print("Performing 5-Fold Group Cross Validation (grouped by s1_id)...")
+    for fold, (train_idx, val_idx) in enumerate(gkf.split(X, y, groups=pairs_df['s1_id'])):
+        X_tr, y_tr = X.iloc[train_idx], y.iloc[train_idx]
+        X_va, y_va = X.iloc[val_idx], y.iloc[val_idx]
+        
+        fold_model = lgb.LGBMClassifier(
+            n_estimators=400,
+            learning_rate=0.04,
+            max_depth=8,
+            num_leaves=63,
+            min_child_samples=20,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            random_state=42 + fold,
+            class_weight='balanced',
+            n_jobs=-1
+        )
+        fold_model.fit(X_tr, y_tr)
+        oof_probs[val_idx] = fold_model.predict_proba(X_va)[:, 1]
+        print(f"  Fold {fold + 1}/5 completed.")
+    
+    # Optimize threshold on F0.5 using Out-of-Fold predictions
+    print("\nOptimizing prediction threshold on F0.5 using Out-Of-Fold predictions...")
+    best_threshold = 0.5
+    best_f05 = -1.0
+    
+    val_s1_ids = set(pairs_df['s1_id'])
+    actuals = {s1_id: gt_dict_full.get(s1_id, set()) for s1_id in val_s1_ids}
+    
+    for threshold in np.arange(0.30, 0.86, 0.02):
+        preds = collections.defaultdict(set)
+        match_mask = oof_probs >= threshold
+        
+        match_rows = pairs_df[match_mask]
+        for s1_id, target_id in zip(match_rows['s1_id'], match_rows['target_id']):
+            preds[s1_id].add(target_id)
+            
+        f05 = macro_f05(preds, actuals)
+        print(f"  Threshold {threshold:.2f} → Macro F0.5 = {f05:.4f}")
+        
+        if f05 > best_f05:
+            best_f05 = f05
+            best_threshold = threshold
+    
+    print(f"\n  ★ Optimal OOF Threshold: {best_threshold:.2f} with Macro F0.5 = {best_f05:.4f}")
+    
+    # Retrain on 100% of data with final model
+    print("\nRetraining on 100% of data for final submission model...")
+    final_model = lgb.LGBMClassifier(
+        n_estimators=400,
+        learning_rate=0.04,
         max_depth=8,
         num_leaves=63,
         min_child_samples=20,
@@ -119,61 +167,23 @@ def main():
         class_weight='balanced',
         n_jobs=-1
     )
-    model.fit(X_train, y_train)
-    
-    # Optimize threshold on F0.5 using validation set
-    print("\nOptimizing prediction threshold on F0.5...")
-    y_val_prob = model.predict_proba(X_val)[:, 1]
-    
-    best_threshold = 0.5
-    best_f05 = 0.0
-    
-    for threshold in np.arange(0.2, 0.8, 0.05):
-        preds = collections.defaultdict(set)
-        actuals = collections.defaultdict(set)
-        
-        match_mask = y_val_prob >= threshold
-        for s1_id, target_id, is_true in zip(pairs_val['s1_id'], pairs_val['target_id'], y_val):
-            actuals[s1_id]  # ensure key exists
-        
-        for s1_id, target_id in zip(pairs_val.loc[match_mask, 's1_id'], pairs_val.loc[match_mask, 'target_id']):
-            preds[s1_id].add(target_id)
-            
-        # Build actuals from gt_dict_full for these s1 entities
-        val_s1_ids = set(pairs_val['s1_id'])
-        actuals = {s1_id: gt_dict_full.get(s1_id, set()) for s1_id in val_s1_ids}
-        
-        scores = []
-        for s1_id, actual in actuals.items():
-            predicted = preds.get(s1_id, set())
-            scores.append(f05_single(predicted, actual))
-        f05 = sum(scores) / len(scores) if scores else 0.0
-        
-        print(f"  Threshold {threshold:.2f} → F0.5 = {f05:.4f}")
-        if f05 > best_f05:
-            best_f05 = f05
-            best_threshold = threshold
-    
-    print(f"\n  ★ Best Threshold: {best_threshold:.2f} with F0.5 = {best_f05:.4f}")
-    
-    # Retrain on 100% of data with the full model
-    print("\nRetraining on 100% of data for final submission model...")
-    model.fit(X, y)
+    final_model.fit(X, y)
     
     # Save the model AND the optimal threshold
     model_path = MODELS_DIR / "lgbm_model.pkl"
     with open(model_path, 'wb') as f:
-        pickle.dump({'model': model, 'threshold': best_threshold}, f)
+        pickle.dump({'model': final_model, 'threshold': best_threshold}, f)
         
     print(f"Model + threshold saved to {model_path}!")
     
     # Print feature importance
     importances = pd.DataFrame({
         'feature': X.columns,
-        'importance': model.feature_importances_
+        'importance': final_model.feature_importances_
     }).sort_values('importance', ascending=False)
     print("\nFeature Importances:")
     print(importances.to_string(index=False))
     
 if __name__ == "__main__":
     main()
+    
