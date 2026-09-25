@@ -47,11 +47,11 @@ def main():
     gt_with_matches = gt[gt['matched_entity_ids'].str.len() > 0]
     
     print("Generating Training Pairs...")
-    # 1. Sample 50,000 S1 IDs for multi-strategy blocking to get hard negatives
-    s1_sample = s1.sample(n=50000, random_state=42)
+    # 1. Sample 20,000 S1 IDs for multi-strategy blocking to get hard negatives
+    s1_sample = s1.sample(n=20000, random_state=42)
     
     # Sample target_df down to 2 Million rows for hard-negative generation
-    target_sample = target_df.sample(n=min(2000000, len(target_df)), random_state=42)
+    target_sample = target_df.sample(n=min(500000, len(target_df)), random_state=42)
     
     # 2. Block using MULTI-STRATEGY against the sampled target
     t0 = time.time()

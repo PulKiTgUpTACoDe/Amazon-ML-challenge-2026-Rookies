@@ -25,7 +25,7 @@ def block_exact_match(s1: pd.DataFrame, target_df: pd.DataFrame, column: str) ->
 
 
 def block_token_overlap(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
-                        min_shared_tokens: int = 2) -> set[tuple[str, str]]:
+                        min_shared_tokens: int = 3) -> set[tuple[str, str]]:
     """
     Inverted-index blocking: builds a token → entity_id index for target,
     then for each S1 entity, finds targets sharing >= min_shared_tokens.
@@ -38,30 +38,34 @@ def block_token_overlap(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     
     for idx, name in enumerate(target_names):
         tokens = set(name.split())
-        # Only index meaningful tokens (length > 2 to skip "of", "the", etc.)
         for token in tokens:
             if len(token) > 2:
                 token_to_targets[token].add(idx)
+    
+    # Remove overly common tokens (> 5000 targets) — they act like stop words
+    # and cause combinatorial explosion
+    token_to_targets = {k: v for k, v in token_to_targets.items() if len(v) <= 5000}
     
     candidate_pairs = set()
     s1_ids = s1['entity_id'].values
     s1_names = s1[column].fillna("").astype(str).values
     
     for s1_idx, name in enumerate(s1_names):
-        tokens = set(t for t in name.split() if len(t) > 2)
+        tokens = set(t for t in name.split() if len(t) > 2 and t in token_to_targets)
         if not tokens:
             continue
             
-        # Count how many tokens each target shares with this S1 entity
         target_counts = defaultdict(int)
         for token in tokens:
             for t_idx in token_to_targets.get(token, set()):
                 target_counts[t_idx] += 1
         
         s1_id = s1_ids[s1_idx]
-        for t_idx, count in target_counts.items():
-            if count >= min_shared_tokens:
-                candidate_pairs.add((s1_id, target_ids[t_idx]))
+        # Only keep targets with enough shared tokens, cap at 20 per entity
+        matches = [(t_idx, count) for t_idx, count in target_counts.items() if count >= min_shared_tokens]
+        matches.sort(key=lambda x: -x[1])
+        for t_idx, _ in matches[:20]:
+            candidate_pairs.add((s1_id, target_ids[t_idx]))
     
     return candidate_pairs
 
@@ -173,7 +177,7 @@ def block_tfidf(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     target_ids = target_df['entity_id'].values
     candidate_pairs = set()
 
-    chunk_size = 100 
+    chunk_size = 500 
     print(f"  Calculating sparse dot products (chunk size {chunk_size})...")
     for start_idx in range(0, X1.shape[0], chunk_size):
         t_chunk = time.time()
