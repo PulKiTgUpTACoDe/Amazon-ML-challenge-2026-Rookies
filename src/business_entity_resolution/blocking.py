@@ -24,6 +24,17 @@ def block_exact_match(s1: pd.DataFrame, target_df: pd.DataFrame, column: str) ->
     return candidate_pairs
 
 
+GENERIC_BUSINESS_TOKENS = {
+    'incorporated', 'corporation', 'company', 'limited', 'liability', 'partnership',
+    'enterprises', 'services', 'solutions', 'international', 'national', 'industries',
+    'pharmaceuticals', 'laboratories', 'construction', 'consulting', 'holdings', 'systems',
+    'management', 'communications', 'distribution', 'private', 'public', 'group',
+    'inc', 'llc', 'ltd', 'corp', 'co', 'llp', 'plc', 'pvt', 'intl', 'natl', 'svcs',
+    'svc', 'mfg', 'assoc', 'assn', 'grp', 'hldgs', 'entr', 'tech', 'technol', 'soln',
+    'solns', 'sys', 'mgmt', 'comm', 'dist', 'indus', 'pharm', 'pharma', 'lab', 'labs',
+    'fin', 'finl', 'consult', 'constr', 'dba', 'and', 'the', 'for', 'with', 'store', 'shop'
+}
+
 def block_token_overlap(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
                         min_shared_tokens: int = 2) -> set[tuple[str, str]]:
     """
@@ -38,9 +49,9 @@ def block_token_overlap(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     
     for idx, name in enumerate(target_names):
         tokens = set(name.split())
-        # Only index meaningful tokens (length > 2 to skip "of", "the", etc.)
+        # Only index meaningful non-generic tokens (length > 2 and not in stop-list)
         for token in tokens:
-            if len(token) > 2:
+            if len(token) > 2 and token.lower() not in GENERIC_BUSINESS_TOKENS:
                 token_to_targets[token].add(idx)
     
     candidate_pairs = set()
@@ -48,7 +59,7 @@ def block_token_overlap(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     s1_names = s1[column].fillna("").astype(str).values
     
     for s1_idx, name in enumerate(s1_names):
-        tokens = set(t for t in name.split() if len(t) > 2)
+        tokens = set(t for t in name.split() if len(t) > 2 and t.lower() not in GENERIC_BUSINESS_TOKENS)
         if not tokens:
             continue
             
