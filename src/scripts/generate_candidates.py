@@ -31,7 +31,7 @@ def chunked_tfidf_blocking(s1: pd.DataFrame, target_df: pd.DataFrame,
     s1_ids = s1['entity_id'].values
     target_ids = target_df['entity_id'].values
     
-    # 5000 chunk size causes 34GB memory spike on the dot product, 100 keeps it < 1GB
+    # 100 chunk size keeps it < 1GB
     chunk_size = 100 
     print(f"  Calculating sparse dot products (chunk size {chunk_size}) and writing to disk...")
     

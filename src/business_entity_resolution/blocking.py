@@ -65,7 +65,7 @@ def block_tfidf(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     candidate_pairs = set()
 
     # Chunk over S1 to save memory during sparse dot product.
-    # We must use a very small chunk size (100) because a 5000 x 2,000,000 dense-ish sparse dot product 
+    # We must use a very small chunk size (100) 
     # produces 8.5 billion non-zeros, requiring ~68GB of RAM. 
     # A chunk size of 100 drops the peak memory for the dot product result to < 1.5GB.
     chunk_size = 100 
