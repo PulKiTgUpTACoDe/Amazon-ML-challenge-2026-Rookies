@@ -1,6 +1,7 @@
 import re
 import unicodedata
 import pandas as pd
+from .abbreviations import expand_business_name, expand_address
 
 def normalize_text(text: str) -> str:
     """
@@ -29,11 +30,17 @@ def normalize_text(text: str) -> str:
 
 def normalize_dataframe(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """
-    Apply text normalization to a list of columns in a DataFrame in-place to save memory.
+    Apply text normalization + abbreviation expansion to a list of columns in a DataFrame.
     """
     for col in columns:
         if col == 'entity_id' or col == 'country':
             continue
         if col in df.columns:
             df[col] = df[col].apply(normalize_text)
+            # Apply abbreviation expansion after basic normalization
+            if col == 'business_name':
+                df[col] = df[col].apply(expand_business_name)
+            elif col == 'business_address':
+                df[col] = df[col].apply(expand_address)
     return df
+

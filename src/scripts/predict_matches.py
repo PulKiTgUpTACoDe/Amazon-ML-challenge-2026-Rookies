@@ -12,13 +12,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from business_entity_resolution.data import load_source, TRAIN_DIR, TEST_DIR
 from business_entity_resolution.normalization import normalize_dataframe
-from business_entity_resolution.features import extract_features_for_pairs
+from business_entity_resolution.features import build_feature_matrix
 
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, choices=["train", "test"], default="test", help="Dataset to process")
-    parser.add_argument("--threshold", type=float, default=0.4, help="Prediction threshold")
+    parser.add_argument("--threshold", type=float, default=None, help="Override prediction threshold (default: use model's optimized threshold)")
     args = parser.parse_args()
     
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -54,7 +54,19 @@ def main():
     
     print("Step 2: Loading Model...")
     with open(MODELS_DIR / "lgbm_model.pkl", 'rb') as f:
-        model = pickle.load(f)
+        saved = pickle.load(f)
+    
+    # Support both old (plain model) and new (dict with model+threshold) formats
+    if isinstance(saved, dict):
+        model = saved['model']
+        optimal_threshold = saved.get('threshold', 0.4)
+    else:
+        model = saved
+        optimal_threshold = 0.4
+    
+    # Allow CLI override
+    threshold = args.threshold if args.threshold is not None else optimal_threshold
+    print(f"Using prediction threshold: {threshold}")
         
     print("Step 3: Streaming Candidates and Predicting...")
     
@@ -70,14 +82,14 @@ def main():
     for i, chunk in enumerate(chunk_iter):
         t_chunk = time.time()
         
-        # Extract features
-        X = extract_features_for_pairs(chunk, s1_lookup, target_lookup)
+        # Extract features using the same function as training
+        X = build_feature_matrix(chunk, s1_lookup, target_lookup)
         
         # Predict
         y_prob = model.predict_proba(X)[:, 1]
         
         # Filter matches
-        is_match = y_prob >= args.threshold
+        is_match = y_prob >= threshold
         match_rows = chunk[is_match]
         
         # Accumulate matches
@@ -94,12 +106,13 @@ def main():
     print("Step 4: Writing Final Results...")
     
     # We must output EVERY ID from S1, even if it has no matches (empty string)
+    # The competition requires comma-separated IDs, NOT pipe-separated
     out_lines = []
     out_lines.append("source1_entity_id\tmatched_entity_ids\n")
     
     for s1_id in s1_lookup.index:
         matched_ids = matches_dict.get(s1_id, [])
-        joined_matches = "|".join(matched_ids) if matched_ids else ""
+        joined_matches = ",".join(matched_ids) if matched_ids else ""
         out_lines.append(f"{s1_id}\t{joined_matches}\n")
         
     with open(out_file, 'w', encoding='utf-8') as f:
