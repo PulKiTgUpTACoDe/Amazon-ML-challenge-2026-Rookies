@@ -20,13 +20,15 @@ EXPECTED_GT_COLS = ["source1_entity_id", "matched_entity_ids"]
 
 
 # ── loaders ──────────────────────────────────────────────────────────────
-def load_source(path: str | Path) -> pd.DataFrame:
+def load_source(path: str | Path, usecols: list[str] | None = None, nrows: int | None = None) -> pd.DataFrame:
     """Load a source TSV (source1/2/3) and validate schema.
 
     entity_id is kept as a string. No columns are dropped or renamed.
     """
-    df = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False)
-    missing = set(EXPECTED_SOURCE_COLS) - set(df.columns)
+    df = pd.read_csv(path, sep="\t", dtype=str, keep_default_na=False, usecols=usecols, nrows=nrows)
+    # Only check missing for the columns we requested
+    expected = set(EXPECTED_SOURCE_COLS) if usecols is None else set(usecols)
+    missing = expected - set(df.columns)
     if missing:
         raise ValueError(f"{path}: missing columns {missing}")
     return df
