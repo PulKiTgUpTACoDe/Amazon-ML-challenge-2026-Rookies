@@ -7,7 +7,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from business_entity_resolution.data import load_source, TRAIN_DIR, TEST_DIR
 from business_entity_resolution.normalization import normalize_dataframe
@@ -31,8 +31,8 @@ def chunked_tfidf_blocking(s1: pd.DataFrame, target_df: pd.DataFrame,
     s1_ids = s1['entity_id'].values
     target_ids = target_df['entity_id'].values
     
-    # 100 chunk size keeps it < 1GB
-    chunk_size = 100 
+    # 2000 chunk size keeps it < 8GB RAM, and runs 20x faster than 100
+    chunk_size = 2000 
     print(f"  Calculating sparse dot products (chunk size {chunk_size}) and writing to disk...")
     
     total_pairs_written = 0
@@ -87,7 +87,7 @@ def main():
     parser.add_argument("--mode", type=str, choices=["train", "test"], default="test", help="Dataset to process")
     args = parser.parse_args()
     
-    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
     OUTPUT_DIR = PROJECT_ROOT / "output"
     OUTPUT_DIR.mkdir(exist_ok=True)
     
@@ -136,8 +136,8 @@ def main():
                 s1, target_chunk, 
                 out_file=out_file, 
                 vectorizer=vectorizer,
-                top_k=5, 
-                similarity_threshold=0.4
+                top_k=10, 
+                similarity_threshold=0.3
             )
             total_candidates += pairs_written
             

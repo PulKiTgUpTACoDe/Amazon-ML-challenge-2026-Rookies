@@ -7,7 +7,7 @@ import pandas as pd
 import numpy as np
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from business_entity_resolution.data import load_source, load_ground_truth, parse_matched_ids, TRAIN_DIR
 from business_entity_resolution.normalization import normalize_dataframe
@@ -15,7 +15,7 @@ from business_entity_resolution.blocking import block_tfidf
 from business_entity_resolution.features import build_feature_matrix
 
 def main():
-    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
     MODELS_DIR = PROJECT_ROOT / "models"
     MODELS_DIR.mkdir(exist_ok=True)
     

@@ -8,7 +8,7 @@ import numpy as np
 import collections
 
 # Add src to path
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from business_entity_resolution.data import load_source, TRAIN_DIR, TEST_DIR
 from business_entity_resolution.normalization import normalize_dataframe
@@ -18,10 +18,10 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str, choices=["train", "test"], default="test", help="Dataset to process")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Prediction threshold")
+    parser.add_argument("--threshold", type=float, default=0.4, help="Prediction threshold")
     args = parser.parse_args()
     
-    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
     MODELS_DIR = PROJECT_ROOT / "models"
     OUTPUT_DIR = PROJECT_ROOT / "output"
     

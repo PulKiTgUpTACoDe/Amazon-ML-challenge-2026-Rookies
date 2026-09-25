@@ -3,12 +3,12 @@ import zipfile
 from pathlib import Path
 
 def main():
-    PROJECT_ROOT = Path(__file__).resolve().parents[1]
+    PROJECT_ROOT = Path(__file__).resolve().parents[2]
     
     # Files and folders to include
     # We map local paths to the zip archive paths required by the competition
     
-    team_name = "PulKiTgUpTACoDe" # Change this to your actual team name if different
+    team_name = "Rookies" 
     zip_name = f"{team_name}_submission.zip"
     zip_path = PROJECT_ROOT / zip_name
     
@@ -26,20 +26,17 @@ def main():
                 print(f"WARNING: {file_path} not found. Did you run the pipeline?")
                 
         # 2. Source Code
-        src_dir = PROJECT_ROOT / "src"
-        if src_dir.exists():
-            for root, _, files in os.walk(src_dir):
+        business_dir = PROJECT_ROOT / "src" / "business_entity_resolution"
+        if business_dir.exists():
+            for root, _, files in os.walk(business_dir):
                 for file in files:
                     if file.endswith(".py"):
                         file_path = Path(root) / file
-                        arc_name = file_path.relative_to(PROJECT_ROOT)
-                        # The rules state code/business_entity_resolution/src/
-                        # We will just map our src/ to code/business_entity_resolution/src/
-                        zip_arcname = f"code/business_entity_resolution/src/{file_path.relative_to(src_dir)}"
+                        zip_arcname = f"code/business_entity_resolution/src/{file_path.relative_to(business_dir)}"
                         zipf.write(file_path, arcname=zip_arcname)
         
         # Also include scripts/
-        scripts_dir = PROJECT_ROOT / "scripts"
+        scripts_dir = PROJECT_ROOT / "src" / "scripts"
         if scripts_dir.exists():
             for root, _, files in os.walk(scripts_dir):
                 for file in files:
