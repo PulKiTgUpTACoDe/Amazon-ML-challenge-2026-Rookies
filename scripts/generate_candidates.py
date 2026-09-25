@@ -31,8 +31,9 @@ def chunked_tfidf_blocking(s1: pd.DataFrame, target_df: pd.DataFrame,
     s1_ids = s1['entity_id'].values
     target_ids = target_df['entity_id'].values
     
-    chunk_size = 5000 
-    print("  Calculating sparse dot products and writing to disk...")
+    # 5000 chunk size causes 34GB memory spike on the dot product, 100 keeps it < 1GB
+    chunk_size = 100 
+    print(f"  Calculating sparse dot products (chunk size {chunk_size}) and writing to disk...")
     
     total_pairs_written = 0
     with open(out_file, 'a', encoding='utf-8') as f:

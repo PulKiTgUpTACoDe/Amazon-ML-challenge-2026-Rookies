@@ -62,12 +62,14 @@ def block_tfidf(s1: pd.DataFrame, target_df: pd.DataFrame, column: str,
     # Pre-fetch numpy arrays of IDs for fast lookup
     s1_ids = s1['entity_id'].values
     target_ids = target_df['entity_id'].values
-    
     candidate_pairs = set()
-    
-    # Chunk over S1 to save memory during sparse dot product
-    chunk_size = 5000 
-    print("  Calculating sparse dot products...")
+
+    # Chunk over S1 to save memory during sparse dot product.
+    # We must use a very small chunk size (100) because a 5000 x 2,000,000 dense-ish sparse dot product 
+    # produces 8.5 billion non-zeros, requiring ~68GB of RAM. 
+    # A chunk size of 100 drops the peak memory for the dot product result to < 1.5GB.
+    chunk_size = 100 
+    print(f"  Calculating sparse dot products (chunk size {chunk_size})...")
     for start_idx in range(0, X1.shape[0], chunk_size):
         t_chunk = time.time()
         end_idx = min(start_idx + chunk_size, X1.shape[0])
