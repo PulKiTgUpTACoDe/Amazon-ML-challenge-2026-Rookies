@@ -17,8 +17,12 @@ def chunked_tfidf_blocking(s1: pd.DataFrame, target_df: pd.DataFrame,
                           column: str = 'business_name', 
                           top_k: int = 5, similarity_threshold: float = 0.4):
     """
-    Performs memory-safe chunked sparse dot product blocking and appends to out_file.
+    Performs lightning-fast C++ sparse dot product blocking using sparse_dot_topn.
+    Chunks X1 to ensure we don't blow up 16GB RAM.
     """
+    import scipy.sparse as sp
+    from sparse_dot_topn import sp_matmul_topn
+    
     s1_texts = s1[column].fillna("").astype(str)
     target_texts = target_df[column].fillna("").astype(str)
     
@@ -31,53 +35,47 @@ def chunked_tfidf_blocking(s1: pd.DataFrame, target_df: pd.DataFrame,
     s1_ids = s1['entity_id'].values
     target_ids = target_df['entity_id'].values
     
-    # 2000 chunk size keeps it < 8GB RAM, and runs 20x faster than 100
-    chunk_size = 2000 
-    print(f"  Calculating sparse dot products (chunk size {chunk_size}) and writing to disk...")
+    X2_T = sp.csr_matrix(X2).T
     
+    # Chunk X1 to avoid RAM thrashing (100k rows at a time)
+    chunk_size = 100000
     total_pairs_written = 0
+    
     with open(out_file, 'a', encoding='utf-8') as f:
         for start_idx in range(0, X1.shape[0], chunk_size):
-            t_chunk = time.time()
             end_idx = min(start_idx + chunk_size, X1.shape[0])
-            X1_chunk = X1[start_idx:end_idx]
+            print(f"  Processing S1 chunk {start_idx} to {end_idx}...")
+            t_chunk = time.time()
             
-            similarity_chunk = X1_chunk.dot(X2.T)
+            X1_chunk = sp.csr_matrix(X1[start_idx:end_idx])
             
-            indptr = similarity_chunk.indptr
-            indices = similarity_chunk.indices
-            data = similarity_chunk.data
+            # C++ dot product for this chunk
+            res = sp_matmul_topn(
+                X1_chunk, 
+                X2_T, 
+                top_n=top_k, 
+                threshold=similarity_threshold
+            )
+            
+            indptr = res.indptr
+            indices = res.indices
             
             pairs_chunk = []
-            for i in range(similarity_chunk.shape[0]):
+            for i in range(res.shape[0]):
                 start_ptr = indptr[i]
                 end_ptr = indptr[i+1]
                 if start_ptr == end_ptr:
                     continue
                     
-                row_indices = indices[start_ptr:end_ptr]
-                row_data = data[start_ptr:end_ptr]
-                
-                valid_mask = row_data >= similarity_threshold
-                valid_indices = row_indices[valid_mask]
-                valid_scores = row_data[valid_mask]
-                
-                if len(valid_indices) == 0:
-                    continue
-                    
-                if len(valid_scores) > top_k:
-                    idx = np.argpartition(-valid_scores, top_k - 1)[:top_k]
-                    top_indices = valid_indices[idx]
-                else:
-                    top_indices = valid_indices
-                
                 s1_id = s1_ids[start_idx + i]
-                for t_idx in top_indices:
+                for t_idx in indices[start_ptr:end_ptr]:
                     pairs_chunk.append(f"{s1_id}\t{target_ids[t_idx]}\n")
             
-            f.writelines(pairs_chunk)
-            total_pairs_written += len(pairs_chunk)
-            print(f"    Chunk {start_idx} to {end_idx} done in {time.time()-t_chunk:.2f}s. Wrote {len(pairs_chunk)} pairs.")
+            if pairs_chunk:
+                f.writelines(pairs_chunk)
+                total_pairs_written += len(pairs_chunk)
+            
+            print(f"    -> Chunk done in {time.time()-t_chunk:.2f}s. Wrote {len(pairs_chunk)} pairs.")
             
     return total_pairs_written
 
@@ -103,7 +101,7 @@ def main():
     # 1. Fit Vectorizer on a sample of S1 to avoid holding all strings
     print(f"Step 1: Fitting TF-IDF Vectorizer on a sample of S1 ({args.mode})...")
     t0 = time.time()
-    vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=2)
+    vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=2, max_df=0.01)
     
     # Load just 500k rows of S1 for fitting the vocabulary
     s1_sample = pd.read_csv(data_dir / f"{args.mode}_source1.tsv", sep="\t", usecols=['business_name'], nrows=500000, dtype=str, keep_default_na=False)
@@ -136,7 +134,7 @@ def main():
                 s1, target_chunk, 
                 out_file=out_file, 
                 vectorizer=vectorizer,
-                top_k=10, 
+                top_k=5, 
                 similarity_threshold=0.3
             )
             total_candidates += pairs_written
