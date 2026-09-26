@@ -1,11 +1,20 @@
+"""
+Predict matches from the candidate pairs using the trained LightGBM model.
+
+Reads:  output/candidate_pairs_raw.tsv  (internal one-pair-per-row format)
+Writes: output/matching_results.tsv     (competition format)
+
+If candidate_pairs_raw.tsv does not exist but candidate_pairs.tsv does in the
+old one-pair-per-row format, it falls back to that.
+"""
 import sys
-import os
 import time
 import pickle
 from pathlib import Path
+from collections import defaultdict
+
 import pandas as pd
 import numpy as np
-import collections
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -14,111 +23,155 @@ from business_entity_resolution.data import load_source, TRAIN_DIR, TEST_DIR
 from business_entity_resolution.normalization import normalize_dataframe
 from business_entity_resolution.features import build_feature_matrix
 
+
 def main():
     import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", type=str, choices=["train", "test"], default="test", help="Dataset to process")
-    parser.add_argument("--threshold", type=float, default=None, help="Override prediction threshold (default: use model's optimized threshold)")
+
+    parser = argparse.ArgumentParser(description="Predict entity matches from candidates")
+    parser.add_argument("--mode", choices=["train", "test"], default="test")
+    parser.add_argument(
+        "--threshold", type=float, default=None,
+        help="Override prediction threshold (default: use model's optimized value)",
+    )
     args = parser.parse_args()
-    
+
     PROJECT_ROOT = Path(__file__).resolve().parents[2]
     MODELS_DIR = PROJECT_ROOT / "models"
     OUTPUT_DIR = PROJECT_ROOT / "output"
-    
+
     data_dir = TEST_DIR if args.mode == "test" else TRAIN_DIR
-    candidates_file = OUTPUT_DIR / "candidate_pairs.tsv"
-    out_file = OUTPUT_DIR / "matching_results.tsv"
-    
-    if not candidates_file.exists():
-        print(f"Error: {candidates_file} does not exist. Run generate_candidates.py first.")
+
+    # Resolve candidate file: prefer raw, fall back to old format
+    raw_file = OUTPUT_DIR / "candidate_pairs_raw.tsv"
+    old_file = OUTPUT_DIR / "candidate_pairs.tsv"
+
+    if raw_file.exists():
+        candidates_file = raw_file
+    elif old_file.exists():
+        candidates_file = old_file
+    else:
+        print("Error: No candidate file found. Run generate_candidates.py first.")
         return
-        
-    print(f"Step 1: Loading Data into Memory ({args.mode})...")
-    cols = ['entity_id', 'business_name', 'business_address', 'country']
-    
+
+    out_file = OUTPUT_DIR / "matching_results.tsv"
+
+    # ── Step 1: Load and normalize data ──
+    print(f"Step 1: Loading data ({args.mode})...")
+    cols = ["entity_id", "business_name", "business_address", "country"]
     t0 = time.time()
+
     s1 = load_source(data_dir / f"{args.mode}_source1.tsv", usecols=cols)
     s2 = load_source(data_dir / f"{args.mode}_source2.tsv", usecols=cols)
     s3 = load_source(data_dir / f"{args.mode}_source3.tsv", usecols=cols)
-    
+
     s1 = normalize_dataframe(s1, cols)
     s2 = normalize_dataframe(s2, cols)
     s3 = normalize_dataframe(s3, cols)
-    
+
     target_df = pd.concat([s2, s3], ignore_index=True)
     del s2, s3
-    
-    s1_lookup = s1.set_index('entity_id')
-    target_lookup = target_df.set_index('entity_id')
-    print(f"Data loaded and indexed in {time.time()-t0:.2f}s")
-    
-    print("Step 2: Loading Model...")
-    with open(MODELS_DIR / "lgbm_model.pkl", 'rb') as f:
+
+    s1_lookup = s1.set_index("entity_id")
+    target_lookup = target_df.set_index("entity_id")
+    all_s1_ids = s1["entity_id"].values.tolist()
+    print(f"  Loaded in {time.time()-t0:.1f}s  (S1={len(s1):,}, targets={len(target_df):,})")
+
+    # ── Step 2: Load model ──
+    print("Step 2: Loading LightGBM model...")
+    model_path = MODELS_DIR / "lgbm_model.pkl"
+    with open(model_path, "rb") as f:
         saved = pickle.load(f)
-    
-    # Support both old (plain model) and new (dict with model+threshold) formats
+
     if isinstance(saved, dict):
-        model = saved['model']
-        optimal_threshold = saved.get('threshold', 0.4)
+        model = saved["model"]
+        optimal_threshold = saved.get("threshold", 0.4)
     else:
         model = saved
         optimal_threshold = 0.4
-    
-    # Allow CLI override
+
     threshold = args.threshold if args.threshold is not None else optimal_threshold
-    print(f"Using prediction threshold: {threshold}")
-        
-    print("Step 3: Streaming Candidates and Predicting...")
-    
-    matches_dict = collections.defaultdict(list)
-    chunk_size = 500000
-    
+    print(f"  Threshold: {threshold}")
+
+    # ── Step 3: Stream candidates, extract features, predict ──
+    print(f"Step 3: Streaming {candidates_file.name} and predicting...")
+    matches_dict = defaultdict(list)
+    chunk_size = 500_000
+
     chunk_iter = pd.read_csv(candidates_file, sep="\t", chunksize=chunk_size, dtype=str)
-    
+
     t_start = time.time()
     total_processed = 0
     total_matches = 0
-    
+
     for i, chunk in enumerate(chunk_iter):
         t_chunk = time.time()
-        
-        # Extract features using the same function as training
+
+        # Support both column naming conventions
+        if "s1_id" in chunk.columns:
+            pass  # columns already named s1_id / target_id
+        elif "source1_entity_id" in chunk.columns:
+            # Competition grouped format — need to explode
+            rows = []
+            for s1_id, cands_str in zip(chunk["source1_entity_id"], chunk["candidate_entity_ids"]):
+                if pd.isna(cands_str) or str(cands_str).strip() == "":
+                    continue
+                for t_id in str(cands_str).split(","):
+                    t_id = t_id.strip()
+                    if t_id:
+                        rows.append({"s1_id": s1_id, "target_id": t_id})
+            chunk = pd.DataFrame(rows)
+            if chunk.empty:
+                continue
+        else:
+            # Unknown columns — assume first two are s1 and target
+            chunk.columns = ["s1_id", "target_id"]
+
+        # Drop pairs where either ID is missing from lookups
+        valid = chunk["s1_id"].isin(s1_lookup.index) & chunk["target_id"].isin(target_lookup.index)
+        chunk = chunk[valid].reset_index(drop=True)
+
+        if chunk.empty:
+            continue
+
+        # Extract features
         X = build_feature_matrix(chunk, s1_lookup, target_lookup)
-        
+
         # Predict
         y_prob = model.predict_proba(X)[:, 1]
-        
-        # Filter matches
         is_match = y_prob >= threshold
+
+        # Accumulate
         match_rows = chunk[is_match]
-        
-        # Accumulate matches
-        for s1_id, target_id in zip(match_rows['s1_id'], match_rows['target_id']):
+        for s1_id, target_id in zip(match_rows["s1_id"], match_rows["target_id"]):
             matches_dict[s1_id].append(target_id)
-            
+
         total_processed += len(chunk)
-        total_matches += len(match_rows)
-        
-        print(f"  Chunk {i+1} ({total_processed:,} total pairs) - Found {len(match_rows):,} matches in {time.time()-t_chunk:.2f}s")
-        
-    print(f"Prediction complete in {time.time()-t_start:.2f}s. Total matches found: {total_matches:,}")
-    
-    print("Step 4: Writing Final Results...")
-    
-    # We must output EVERY ID from S1, even if it has no matches (empty string)
-    # The competition requires comma-separated IDs, NOT pipe-separated
-    out_lines = []
-    out_lines.append("source1_entity_id\tmatched_entity_ids\n")
-    
-    for s1_id in s1_lookup.index:
-        matched_ids = matches_dict.get(s1_id, [])
-        joined_matches = ",".join(matched_ids) if matched_ids else ""
-        out_lines.append(f"{s1_id}\t{joined_matches}\n")
-        
-    with open(out_file, 'w', encoding='utf-8') as f:
-        f.writelines(out_lines)
-        
-    print(f"Success! Final predictions saved to {out_file}")
+        total_matches += int(is_match.sum())
+
+        elapsed = time.time() - t_chunk
+        print(f"  Chunk {i+1}: {len(chunk):,} pairs → {int(is_match.sum()):,} matches ({elapsed:.1f}s)")
+
+    print(f"\n  Prediction done in {time.time()-t_start:.1f}s. "
+          f"Processed {total_processed:,} pairs → {total_matches:,} matches.")
+
+    # ── Step 4: Write matching_results.tsv (competition format) ──
+    print("Step 4: Writing matching_results.tsv...")
+
+    # Deduplicate match lists
+    for s1_id in matches_dict:
+        matches_dict[s1_id] = list(dict.fromkeys(matches_dict[s1_id]))
+
+    with open(out_file, "w", encoding="utf-8") as f:
+        f.write("source1_entity_id\tmatched_entity_ids\n")
+        for s1_id in all_s1_ids:
+            matched = matches_dict.get(s1_id, [])
+            joined = ",".join(matched) if matched else ""
+            f.write(f"{s1_id}\t{joined}\n")
+
+    matched_entities = sum(1 for s in all_s1_ids if matches_dict.get(s))
+    print(f"  Written {len(all_s1_ids):,} rows ({matched_entities:,} with matches)")
+    print(f"\nDone! Results saved to {out_file}")
+
 
 if __name__ == "__main__":
     main()
